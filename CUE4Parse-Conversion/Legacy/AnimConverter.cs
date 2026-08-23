@@ -270,7 +270,16 @@ namespace CUE4Parse_Conversion.Animations
                     referencePoses = FAnimationRuntime.LoadRestAsPoses(skeleton);
                     break;
                 case EAdditiveBasePoseType.ABPT_LocalAnimFrame:
-                    referencePoses = FAnimationRuntime.LoadAsPoses(animSeq, skeleton, refFrameIndex);
+                    // Editor/source data can recover the authored local reference frame directly.
+                    // Cooked compressed additive tracks, however, contain deltas; their authored
+                    // pre-additive frame is no longer available. Treating a cooked delta frame as
+                    // an absolute base collapses the skeleton when ActorX/FBX materializes it.
+                    // Use the skeleton reference pose as a lossless transport base instead. A
+                    // consumer that wants additive behavior must subtract that same transport base;
+                    // OriginalSequence still preserves the authored LocalAnimFrame metadata.
+                    referencePoses = animSeq.OriginalSequence.RawAnimationData is { Length: > 0 }
+                        ? FAnimationRuntime.LoadAsPoses(animSeq, skeleton, refFrameIndex)
+                        : FAnimationRuntime.LoadRestAsPoses(skeleton);
                     break;
                 default:
                 {
@@ -304,7 +313,10 @@ namespace CUE4Parse_Conversion.Animations
                 var refPose = (FCompactPose)referencePoses[refPoseType switch
                 {
                     EAdditiveBasePoseType.ABPT_AnimScaled => frameIndex % maxRefPosFrame,
-                    _ => refFrameIndex
+                    // RefPose, LocalAnimFrame and AnimFrame are materialized above as a
+                    // single already-selected pose. RefFrameIndex belongs to the source
+                    // sequence and must not be used to index this one-element array.
+                    _ => 0
                 }].Clone();
 
                 switch (animSeq.OriginalSequence.AdditiveAnimType)
