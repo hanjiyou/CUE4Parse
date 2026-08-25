@@ -9,12 +9,14 @@ namespace CUE4Parse_Conversion.Writers.ActorX.Structs.Animations;
 public class CAnimSet
 {
     public readonly USkeleton Skeleton;
+    public readonly UAnimationAsset? SourceAsset;
     public readonly List<CAnimSequence> Sequences = [];
 
     public float TotalAnimTime;
 
-    public CAnimSet(USkeleton skeleton)
+    public CAnimSet(USkeleton skeleton, UAnimationAsset? sourceAsset = null)
     {
         Skeleton = skeleton;
+        SourceAsset = sourceAsset;
     }
 }

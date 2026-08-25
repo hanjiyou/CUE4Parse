@@ -50,7 +50,7 @@ public class UsdAnimFormat : IAnimExportFormat
                 {
                     if (time < sequence.StartPos ||
                         time >= sequence.StartPos + sequence.AnimEndTime ||
-                        sequence.OriginalSequence.FindTrackForBoneIndex(b) < 0) continue;
+                        !sequence.HasBoneTrack(b)) continue;
 
                     var localFrame = (time - sequence.StartPos) * (sequence.NumFrames / sequence.AnimEndTime);
                     sequence.Tracks[b].GetBoneTransform(localFrame, sequence.NumFrames, ref quat, ref pos, ref scale);

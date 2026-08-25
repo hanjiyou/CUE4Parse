@@ -1,6 +1,7 @@
 ﻿using CUE4Parse.UE4.Assets.Objects;
 using CUE4Parse.UE4.Assets.Utils;
 using CUE4Parse.UE4.Objects.Engine.Curves;
+using CUE4Parse.UE4.Objects.Engine.Animation;
 using CUE4Parse.UE4.Objects.UObject;
 
 namespace CUE4Parse.UE4.Assets.Exports.Animation
@@ -22,7 +23,15 @@ namespace CUE4Parse.UE4.Assets.Exports.Animation
 
         public FAnimCurveBase(FStructFallback data)
         {
-            CurveName = data.GetOrDefault<FName>(nameof(CurveName));
+            // UE5 cooked animation assets can serialize the former CurveName as
+            // an FSmartName property named "Name".  AnimSequence compressed
+            // curves restore their names separately, but raw Montage curves pass
+            // through this fallback constructor and otherwise become NAME_None.
+            if (!data.TryGetValue(out CurveName, nameof(CurveName)))
+            {
+                var smartName = data.GetOrDefault<FSmartName>("Name");
+                CurveName = smartName.DisplayName;
+            }
             CurveTypeFlags = data.GetOrDefault<int>(nameof(CurveTypeFlags));
         }
     }

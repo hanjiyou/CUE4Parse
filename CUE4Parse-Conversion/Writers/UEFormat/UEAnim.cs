@@ -22,10 +22,14 @@ public sealed class UEAnim : UEFormatExport
         WriteRoot(root =>
         {
             WriteMetadata(root, sequence, original);
+            WriteVirtualBones(root, animSet.Skeleton.VirtualBones);
             WriteTracks(root, sequence, original, animSet.Skeleton.ReferenceSkeleton);
 
             if (original.CompressedCurveData?.FloatCurves is { Length: > 0 } floatCurves)
+            {
                 WriteCurves(root, floatCurves, sequence.FramesPerSecond);
+                WriteCurvesV2(root, floatCurves);
+            }
         });
     }
 
@@ -47,7 +51,10 @@ public sealed class UEAnim : UEFormatExport
             });
 
             if (animStreamable.RawCurveData?.FloatCurves is { Length: > 0 } floatCurves)
+            {
                 WriteCurves(root, floatCurves, framesPerSecond);
+                WriteCurvesV2(root, floatCurves);
+            }
         });
     }
 
@@ -64,6 +71,18 @@ public sealed class UEAnim : UEFormatExport
         });
     }
 
+    private static void WriteVirtualBones(FDataAttributeSet root, FVirtualBone[] virtualBones)
+    {
+        if (virtualBones.Length == 0) return;
+
+        root.AddAttribute("VIRTUALBONES", attr => attr.WriteArray(virtualBones, (writer, virtualBone) =>
+        {
+            writer.WriteFString(virtualBone.SourceBoneName.Text);
+            writer.WriteFString(virtualBone.TargetBoneName.Text);
+            writer.WriteFString(virtualBone.VirtualBoneName.Text);
+        }));
+    }
+
     private static void WriteTracks(
         FDataAttributeSet root,
         CAnimSequence sequence,
@@ -72,16 +91,16 @@ public sealed class UEAnim : UEFormatExport
     {
         root.AddAttribute("TRACKS", attr =>
         {
-            attr.WriteArray(sequence.Tracks, (writer, track, i) =>
+            attr.WriteArray(sequence.BoneTrackIndices, (writer, boneIndex) =>
             {
-                writer.WriteFString(refSkeleton.FinalRefBoneInfo[i].Name.Text);
+                writer.WriteFString(refSkeleton.FinalRefBoneInfo[boneIndex].Name.Text);
 
                 var (positions, rotations, scales) = SampleTrackKeys(
-                    track,
-                    refSkeleton.FinalRefBonePose[i],
+                    sequence.Tracks[boneIndex],
+                    refSkeleton.FinalRefBonePose[boneIndex],
                     sequence,
                     original,
-                    i);
+                    boneIndex);
 
                 writer.WriteArray(positions);
                 writer.WriteArray(rotations);
@@ -102,6 +121,36 @@ public sealed class UEAnim : UEFormatExport
         }));
     }
 
+    /// <summary>
+    /// Writes lossless animation-curve data alongside the legacy CURVES block.
+    /// CURVES is intentionally retained for compatibility with existing UEFormat
+    /// consumers; CURVES_V2 preserves the source key times, flags, interpolation,
+    /// tangents, tangent weights, default value, and extrapolation modes.
+    /// </summary>
+    private static void WriteCurvesV2(FDataAttributeSet root, FFloatCurve[] floatCurves)
+    {
+        root.AddAttribute("CURVES_V2", attr => attr.WriteArray(floatCurves, (writer, floatCurve) =>
+        {
+            writer.WriteFString(floatCurve.CurveName.Text);
+            writer.Write(floatCurve.CurveTypeFlags);
+            writer.Write(floatCurve.FloatCurve.DefaultValue);
+            writer.Write((byte) floatCurve.FloatCurve.PreInfinityExtrap);
+            writer.Write((byte) floatCurve.FloatCurve.PostInfinityExtrap);
+            writer.WriteArray(floatCurve.FloatCurve.Keys, (keyWriter, key) =>
+            {
+                keyWriter.Write(key.Time);
+                keyWriter.Write(key.Value);
+                keyWriter.Write((byte) key.InterpMode);
+                keyWriter.Write((byte) key.TangentMode);
+                keyWriter.Write((byte) key.TangentWeightMode);
+                keyWriter.Write(key.ArriveTangent);
+                keyWriter.Write(key.ArriveTangentWeight);
+                keyWriter.Write(key.LeaveTangent);
+                keyWriter.Write(key.LeaveTangentWeight);
+            });
+        }));
+    }
+
     private static (List<FVectorKey> Positions, List<FQuatKey> Rotations, List<FVectorKey> Scales) SampleTrackKeys(
         CAnimTrack track,
         FTransform boneTransform,
@@ -117,7 +166,7 @@ public sealed class UEAnim : UEFormatExport
         FQuat? prevRot = null;
         FVector? prevScale = null;
         var constant = original.GetOrDefault<bool>("bConstantAnimation");
-        var hasTrack = original.FindTrackForBoneIndex(boneIndex) >= 0;
+        var hasTrack = sequence.HasBoneTrack(boneIndex);
 
         for (var frame = 0; frame < sequence.NumFrames; frame++)
         {

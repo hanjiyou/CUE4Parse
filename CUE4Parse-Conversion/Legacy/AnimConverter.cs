@@ -17,9 +17,9 @@ namespace CUE4Parse_Conversion.Animations
 {
     public static class AnimConverter
     {
-        private static CAnimSet ConvertToAnimSet(this USkeleton skeleton)
+        private static CAnimSet ConvertToAnimSet(this USkeleton skeleton, UAnimationAsset? sourceAsset = null)
         {
-            return new CAnimSet(skeleton);
+            return new CAnimSet(skeleton, sourceAsset);
         }
 
         public static CAnimSet ConvertAnims(this UAnimationAsset asset)
@@ -38,7 +38,7 @@ namespace CUE4Parse_Conversion.Animations
 
         public static CAnimSet ConvertAnims(this USkeleton skeleton, UAnimComposite? animComposite)
         {
-            var animSet = skeleton.ConvertToAnimSet();
+            var animSet = skeleton.ConvertToAnimSet(animComposite);
             if (animComposite == null) return animSet;
 
             foreach (var segment in animComposite.AnimationTrack.AnimSegments)
@@ -59,7 +59,7 @@ namespace CUE4Parse_Conversion.Animations
 
         public static CAnimSet ConvertAnims(this USkeleton skeleton, UAnimMontage? animMontage)
         {
-            var animSet = skeleton.ConvertToAnimSet();
+            var animSet = skeleton.ConvertToAnimSet(animMontage);
             if (animMontage == null) return animSet;
 
             foreach (var slotAnimTrack in animMontage.SlotAnimTracks)
@@ -116,7 +116,7 @@ namespace CUE4Parse_Conversion.Animations
 
         public static CAnimSet ConvertAnims(this USkeleton skeleton, UAnimSequence? animSequence)
         {
-            var animSet = skeleton.ConvertToAnimSet();
+            var animSet = skeleton.ConvertToAnimSet(animSequence);
             if (animSequence == null) return animSet;
 
             // Store UAnimSequence in 'OriginalAnims' array, we just need it from time to time
@@ -186,16 +186,25 @@ namespace CUE4Parse_Conversion.Animations
                     var tracks = aclData.GetCompressedTracks();
                     var tracksHeader = tracks.GetTracksHeader();
                     var numSamples = (int) tracksHeader.NumSamples;
+                    var trackMap = animSequence.GetTrackMap();
+                    if (tracksHeader.NumTracks != trackMap.Length)
+                    {
+                        throw new ParserException(
+                            $"ACL track count {tracksHeader.NumTracks} does not match TrackToSkeleton map count " +
+                            $"{trackMap.Length} for {animSequence.GetPathName()}");
+                    }
 
                     // smh Valo has this set to 1, but it should be 0, right?
                     if (animSequence.IsValidAdditive()) tracks.SetDefaultScale(0);
 
+                    var aclReferencePose = GetACLReferencePose(animSequence, skeleton, animSeq, trackMap);
+
                     // Let the native code do its job
-                    var atomKeys = new FTransform[animSeq.Tracks.Capacity * numSamples];
+                    var atomKeys = new FTransform[trackMap.Length * numSamples];
                     unsafe
                     {
-                        fixed (FTransform* refPosePtr = animSeq.RetargetBasePose ?? skeleton.ReferenceSkeleton.FinalRefBonePose)
-                        fixed (FTrackToSkeletonMap* trackToSkeletonMapPtr = animSequence.GetTrackMap())
+                        fixed (FTransform* refPosePtr = aclReferencePose)
+                        fixed (FTrackToSkeletonMap* trackToSkeletonMapPtr = trackMap)
                         fixed (FTransform* atomKeysPtr = atomKeys)
                         {
                             nReadACLData(tracks.Handle, refPosePtr, trackToSkeletonMapPtr, atomKeysPtr);
@@ -255,6 +264,50 @@ namespace CUE4Parse_Conversion.Animations
             return animSeq;
         }
 
+        private static FTransform[] GetACLReferencePose(
+            UAnimSequence animSequence,
+            USkeleton skeleton,
+            CAnimSequence animSeq,
+            FTrackToSkeletonMap[] trackMap)
+        {
+            var referencePose = animSeq.RetargetBasePose ?? skeleton.ReferenceSkeleton.FinalRefBonePose;
+            if (referencePose.Length < skeleton.BoneCount)
+            {
+                throw new ParserException(
+                    $"ACL reference pose has {referencePose.Length} transforms but Skeleton has " +
+                    $"{skeleton.BoneCount} bones for {animSequence.GetPathName()}");
+            }
+
+            var requiredPoseLength = referencePose.Length;
+            var virtualBoneLimit = skeleton.BoneCount + skeleton.VirtualBones.Length;
+            foreach (var mapEntry in trackMap)
+            {
+                var boneIndex = mapEntry.BoneTreeIndex;
+                if (boneIndex < 0 || boneIndex >= virtualBoneLimit)
+                {
+                    throw new ParserException(
+                        $"ACL TrackToSkeleton index {boneIndex} is outside the Skeleton bone/virtual-bone range " +
+                        $"0..{virtualBoneLimit - 1} for {animSequence.GetPathName()}");
+                }
+
+                requiredPoseLength = Math.Max(requiredPoseLength, boneIndex + 1);
+            }
+
+            if (requiredPoseLength == referencePose.Length)
+                return referencePose;
+
+            // Cooked ACL streams can contain tracks for USkeleton.VirtualBones. Those
+            // indices follow the real reference bones, while FinalRefBonePose contains
+            // real bones only. CAnimSequence deliberately exports only real bone tracks,
+            // so identity entries are safe temporary defaults for native ACL decoding;
+            // the virtual-bone definitions are preserved separately in UEAnim metadata.
+            var paddedReferencePose = new FTransform[requiredPoseLength];
+            Array.Copy(referencePose, paddedReferencePose, referencePose.Length);
+            Array.Fill(paddedReferencePose, FTransform.Identity, referencePose.Length,
+                requiredPoseLength - referencePose.Length);
+            return paddedReferencePose;
+        }
+
         private static CAnimSequence ConvertAdditive(this CAnimSequence animSeq, USkeleton skeleton)
             => animSeq.ConvertAdditive(animSeq.OriginalSequence.RefPoseSeq?.Load<UAnimSequence>(), skeleton);
         public static CAnimSequence ConvertAdditive(this CAnimSequence animSeq, UAnimSequence? refPoseSeq, USkeleton skeleton)
@@ -285,6 +338,16 @@ namespace CUE4Parse_Conversion.Animations
                 {
                     var refPoseSkel = refPoseSeq?.Skeleton.Load<USkeleton>() ?? skeleton;
                     refAnimSet = refPoseSkel.ConvertAnims(refPoseSeq);
+
+                    // Materializing Base + Additive can make a base-sequence bone track
+                    // meaningful even when the additive sequence itself has no track for
+                    // that bone. Preserve the sparse union by bone name; do not fall back
+                    // to exporting every bone in the Skeleton.
+                    AddMappedBoneTracks(
+                        animSeq,
+                        skeleton,
+                        refAnimSet.Sequences[0],
+                        refPoseSkel);
 
                     referencePoses = refPoseType switch
                     {
@@ -332,9 +395,33 @@ namespace CUE4Parse_Conversion.Animations
                 refPose.PushTransformAtFrame(animSeq.Tracks, frameIndex);
             }
 
-            if (refAnimSet != null) // for FindTrackForBoneIndex
-                animSeq.OriginalSequence = refAnimSet.Sequences[0].OriginalSequence;
             return animSeq;
+        }
+
+        private static void AddMappedBoneTracks(
+            CAnimSequence targetSequence,
+            USkeleton targetSkeleton,
+            CAnimSequence sourceSequence,
+            USkeleton sourceSkeleton)
+        {
+            var targetReferenceSkeleton = targetSkeleton.ReferenceSkeleton;
+            var sourceReferenceSkeleton = sourceSkeleton.ReferenceSkeleton;
+
+            foreach (var sourceBoneIndex in sourceSequence.BoneTrackIndices)
+            {
+                if (sourceBoneIndex < 0 || sourceBoneIndex >= sourceReferenceSkeleton.FinalRefBoneInfo.Length)
+                    continue;
+
+                var boneName = sourceReferenceSkeleton.FinalRefBoneInfo[sourceBoneIndex].Name.Text;
+                if (!targetReferenceSkeleton.FinalNameToIndexMap.TryGetValue(boneName, out var targetBoneIndex))
+                {
+                    targetBoneIndex = Array.FindIndex(
+                        targetReferenceSkeleton.FinalRefBoneInfo,
+                        bone => bone.Name.Text.Equals(boneName, StringComparison.Ordinal));
+                }
+
+                targetSequence.AddBoneTrackIndex(targetBoneIndex, targetSkeleton.BoneCount);
+            }
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]

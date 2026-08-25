@@ -19,6 +19,13 @@ namespace CUE4Parse_Conversion.Writers.ActorX.Structs.Animations
         public int LoopingCount;
         public List<CAnimTrack> Tracks;
 
+        // Tracks stays bone-indexed because the legacy conversion/runtime code expects
+        // direct Skeleton bone lookup. BoneTrackIndices is the sparse UE AnimSequence
+        // track map and controls which bone tracks are semantic animation data when a
+        // format (for example UEAnim) can preserve sparse tracks.
+        public readonly List<int> BoneTrackIndices = [];
+        private readonly HashSet<int> _boneTrackIndices = [];
+
         public CAnimSequence(UAnimSequence animSequence, USkeleton skeleton)
         {
             OriginalSequence = animSequence;
@@ -40,6 +47,21 @@ namespace CUE4Parse_Conversion.Writers.ActorX.Structs.Animations
             AnimEndTime = OriginalSequence.SequenceLength;
             LoopingCount = 1;
             Tracks = new List<CAnimTrack>(OriginalSequence.GetNumTracks());
+
+            foreach (var trackMap in OriginalSequence.GetTrackMap())
+            {
+                AddBoneTrackIndex(trackMap.BoneTreeIndex, skeleton.BoneCount);
+            }
+        }
+
+        public bool HasBoneTrack(int boneIndex) => _boneTrackIndices.Contains(boneIndex);
+
+        public void AddBoneTrackIndex(int boneIndex, int skeletonBoneCount)
+        {
+            if (boneIndex < 0 || boneIndex >= skeletonBoneCount || !_boneTrackIndices.Add(boneIndex))
+                return;
+
+            BoneTrackIndices.Add(boneIndex);
         }
 
         public void RetargetTracks(USkeleton skeleton)

@@ -79,7 +79,7 @@ public sealed class ActorXAnim()
                 var orientation = boneTransform.Rotation;
                 var scale = boneTransform.Scale3D;
 
-                if (sequence.OriginalSequence.FindTrackForBoneIndex(boneIndex) >= 0)
+                if (sequence.HasBoneTrack(boneIndex))
                 {
                     sequence.Tracks[boneIndex].GetBoneTransform(frame, sequence.NumFrames, ref orientation, ref position, ref scale);
                 }
@@ -108,7 +108,7 @@ public sealed class ActorXAnim()
                 for (int boneIndex = 0; boneIndex < numBones; boneIndex++)
                 {
                     FVector boneScale = anim.Skeleton.ReferenceSkeleton.FinalRefBonePose[boneIndex].Scale3D;
-                    if (sequence.OriginalSequence.FindTrackForBoneIndex(boneIndex) >= 0)
+                    if (sequence.HasBoneTrack(boneIndex))
                     {
                         var bonePosition = FVector.ZeroVector;
                         var boneOrientation = FQuat.Identity;
