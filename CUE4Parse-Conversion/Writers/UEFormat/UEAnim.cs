@@ -67,7 +67,15 @@ public sealed class UEAnim : UEFormatExport
             attr.WriteFString(original.RefPoseSeq?.GetPathName() ?? string.Empty);
             attr.Write((byte) original.AdditiveAnimType);
             attr.Write((byte) original.RefPoseType);
-            attr.Write(original.RefFrameIndex);
+            // Some cooked sequences retain a stale additive reference-frame
+            // index equal to (or beyond) the shortened sequence frame count.
+            // CAnimTrack already samples the nearest valid frame; serialize the
+            // same bounded index so strict UEAnim readers see self-consistent
+            // metadata rather than rejecting an otherwise valid animation.
+            var boundedRefFrameIndex = sequence.NumFrames > 0
+                ? System.Math.Clamp(original.RefFrameIndex, 0, sequence.NumFrames - 1)
+                : 0;
+            attr.Write(boundedRefFrameIndex);
         });
     }
 

@@ -621,7 +621,8 @@ namespace CUE4Parse_Conversion.Animations
 
             var transOffset = compressedData.CompressedTrackOffsets[trackIndex * 2];
             var rotOffset = compressedData.CompressedTrackOffsets[trackIndex * 2 + 1];
-            var scaleOffset = compressedData.CompressedScaleOffsets.IsValid() ? compressedData.CompressedScaleOffsets.OffsetData[trackIndex] : -1;
+            var hasScaleData = compressedData.CompressedScaleOffsets.IsValid();
+            var scaleOffset = hasScaleData ? compressedData.CompressedScaleOffsets.GetOffsetData(trackIndex, 0) : -1;
 
             // read translation keys
             if (transOffset == -1)
@@ -648,7 +649,13 @@ namespace CUE4Parse_Conversion.Animations
             // read scale keys
             if (scaleOffset == -1)
             {
-                track.KeyScale = [FVector.OneVector];
+                // UE PerTrackCompression decodes an explicit identity scale
+                // track (-1) to zero. A missing scale stream instead retains
+                // the pose's initial scale: zero for baked additive, one for
+                // ordinary absolute poses. Using one for an additive identity
+                // materializes a doubled scale when the reference pose is added.
+                track.KeyScale = [hasScaleData || animSequence.IsValidAdditive()
+                    ? FVector.ZeroVector : FVector.OneVector];
             }
             else
             {

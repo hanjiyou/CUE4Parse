@@ -51,19 +51,18 @@ namespace CUE4Parse_Conversion.Writers.ActorX.Structs.Animations
 
             if (timeKeysCount > 0)
             {
-                // here: KeyPos and KeyQuat sizes either equals to 1 or equals to KeyTime size
-                Trace.Assert(rotKeysCount == 1 || rotKeysCount == timeKeysCount);
-                Trace.Assert(posKeysCount == 1 || posKeysCount == timeKeysCount);
-                Trace.Assert(scaKeysCount == 1 || scaKeysCount == timeKeysCount);
-
-                GetKeyParamsInternal(KeyTime, frame, out rotX, out rotY, out rotF);
-                posX = scaX = rotX;
-                posY = scaY = rotY;
-                posF = scaF = rotF;
-
-                if (rotKeysCount == 1) Reset(out rotX, out rotY, out rotF);
-                if (posKeysCount == 1) Reset(out posX, out posY, out posF);
-                if (scaKeysCount == 1) Reset(out scaX, out scaY, out scaF);
+                // Most streams use one shared KeyTime array for all channels, but
+                // cooked ACL data can contain sparse channels whose key count no
+                // longer matches that shared array. Resolve every channel against
+                // shared time only when the sizes agree; otherwise use its own
+                // time array (or evenly spaced keys). This also handles zero-key
+                // and single-key channels without indexing outside their arrays.
+                ResolveChannelKeyParams(KeyTime, KeyQuatTime, frame, frameCount, rotKeysCount,
+                    out rotX, out rotY, out rotF);
+                ResolveChannelKeyParams(KeyTime, KeyPosTime, frame, frameCount, posKeysCount,
+                    out posX, out posY, out posF);
+                ResolveChannelKeyParams(KeyTime, KeyScaleTime, frame, frameCount, scaKeysCount,
+                    out scaX, out scaY, out scaF);
             }
             else
             {
@@ -97,6 +96,20 @@ namespace CUE4Parse_Conversion.Writers.ActorX.Structs.Animations
                 var position = frame / frameCount * keyCount;
                 x = position.FloorToInt();
                 f = position - x;
+                if (x < 0)
+                {
+                    x = 0;
+                    f = 0.0f;
+                }
+                else if (x >= keyCount)
+                {
+                    // UE clamps an out-of-range additive reference frame to
+                    // the available base sequence data. Cooked assets can
+                    // retain a RefFrameIndex authored against an older/longer
+                    // base sequence, so never let it index beyond sparse keys.
+                    x = keyCount - 1;
+                    f = 0.0f;
+                }
                 y = x + 1;
                 if (y >= keyCount)
                 {
@@ -105,6 +118,29 @@ namespace CUE4Parse_Conversion.Writers.ActorX.Structs.Animations
                 }
             }
             else Reset(out x, out y, out f);
+        }
+
+        private static void ResolveChannelKeyParams(float[] sharedKeyTime, float[] channelKeyTime,
+            float frame, int frameCount, int keyCount, out int x, out int y, out float f)
+        {
+            if (keyCount <= 1)
+            {
+                Reset(out x, out y, out f);
+            }
+            else if (keyCount == sharedKeyTime.Length)
+            {
+                GetKeyParamsInternal(sharedKeyTime, frame, out x, out y, out f);
+            }
+            else
+            {
+                // A stale per-channel time array is no safer than a mismatched
+                // shared array. Use it only when it addresses every channel key;
+                // otherwise fall back to evenly spaced channel keys.
+                var usableChannelTime = channelKeyTime.Length == keyCount
+                    ? channelKeyTime
+                    : Array.Empty<float>();
+                GetKeyParams(usableChannelTime, frame, frameCount, keyCount, out x, out y, out f);
+            }
         }
 
         // In:  KeyTime, Frame, NumFrames, Loop
