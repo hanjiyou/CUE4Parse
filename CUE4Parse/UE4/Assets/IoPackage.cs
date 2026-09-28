@@ -111,7 +111,8 @@ public sealed class IoPackage : AbstractUePackage
             BulkDataMap = [];
             if (uassetAr.Ver >= EUnrealEngineObjectUE5Version.DATA_RESOURCES || uassetAr.Game == GAME_TheFirstDescendant)
             {
-                if (uassetAr.Game >= GAME_UE5_4)
+                // The Finals retains the UE 5.3-style direct bulk-data-map size field.
+                if (uassetAr.Game >= GAME_UE5_4 && uassetAr.Game != GAME_TheFinals)
                 {
                     var pad = uassetAr.Read<ulong>(); // pad
                     _ = uassetAr.ReadArray<byte>((int) pad);

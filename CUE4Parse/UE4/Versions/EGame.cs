@@ -284,6 +284,10 @@ public static class GameUtils
             return game switch
             {
                     GAME_UE5_EA => new FPackageFileVersion(522, 1002),
+                    // The Finals uses a newer game profile while retaining the pre-Verse-cells Zen package layout.
+                    GAME_TheFinals => new FPackageFileVersion(
+                        522,
+                        (int) EUnrealEngineObjectUE5Version.METADATA_SERIALIZATION_OFFSET),
                 < GAME_UE5_1 => new FPackageFileVersion(522, 1004),
                 < GAME_UE5_2 => new FPackageFileVersion(522, 1008),
                     GAME_TheFirstDescendant => new FPackageFileVersion(522, 1002),
