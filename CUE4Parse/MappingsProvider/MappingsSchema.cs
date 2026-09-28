@@ -69,6 +69,14 @@ public class SerializedStruct : Struct
         {
             //if (struc.SuperStruct.TryLoad<UStruct>(out var superStruct))
             var superStruct = struc.SuperStruct.Load<UStruct>();
+            if (superStruct == null && Context != null)
+            {
+                // Cooked IoStore packages may expose native/script super structs only
+                // through the mapping table; their package export is not materialized.
+                var superName = struc.SuperStruct.Name;
+                if (Context.Types.TryGetValue(superName, out var mappedSuper))
+                    return mappedSuper;
+            }
             if (superStruct != null)
             {
                 if (superStruct is UScriptClass)
